@@ -20,3 +20,7 @@ npm-debug.log*
 build/
 */build/
 dist/
+
+# Config locale Claude
+.claude/
+*/.claude/
