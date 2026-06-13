@@ -176,6 +176,62 @@ app.post('/api/schedule-visio', async (req, res) => {
   });
 });
 
+// ===== BAC BLANC - Salons élèves en temps réel =====
+// Présence en mémoire : qui est connecté, dans quel salon.
+const bacStudents = new Map(); // studentId -> { id, name, contact, room, lastSeen }
+const ONLINE_WINDOW_MS = 20000; // un élève est "en ligne" s'il a donné signe de vie < 20s
+
+// L'élève rejoint le bac blanc : on lui crée un salon personnel
+app.post('/api/bac/join', (req, res) => {
+  const { name, contact } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Nom requis' });
+  const id = 'e' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const room = 'matineesbac-' + id;
+  bacStudents.set(id, { id, name: name.trim(), contact: (contact || '').trim(), room, lastSeen: Date.now() });
+  res.json({ success: true, studentId: id, room, name: name.trim() });
+});
+
+// Battement de cœur : l'élève signale qu'il est toujours là (et se re-crée si le serveur a redémarré)
+app.post('/api/bac/heartbeat', (req, res) => {
+  const { studentId, name, contact, room } = req.body || {};
+  if (!studentId) return res.status(400).json({ error: 'studentId requis' });
+  const existing = bacStudents.get(studentId);
+  if (existing) {
+    existing.lastSeen = Date.now();
+  } else if (name) {
+    bacStudents.set(studentId, {
+      id: studentId,
+      name,
+      contact: contact || '',
+      room: room || ('matineesbac-' + studentId),
+      lastSeen: Date.now()
+    });
+  }
+  res.json({ success: true });
+});
+
+// L'élève quitte
+app.post('/api/bac/leave', (req, res) => {
+  const { studentId } = req.body || {};
+  if (studentId) bacStudents.delete(studentId);
+  res.json({ success: true });
+});
+
+// Le prof récupère la liste de tous les élèves avec leur statut en ligne
+app.get('/api/bac/students', (req, res) => {
+  const now = Date.now();
+  const students = [...bacStudents.values()]
+    .map(s => ({
+      id: s.id,
+      name: s.name,
+      contact: s.contact,
+      room: s.room,
+      online: (now - s.lastSeen) < ONLINE_WINDOW_MS
+    }))
+    .sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0) || a.name.localeCompare(b.name));
+  res.json({ success: true, students });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'OK',
