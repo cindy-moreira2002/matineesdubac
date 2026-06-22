@@ -2,6 +2,15 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const Anthropic = require('@anthropic-ai/sdk');
+const nodemailer = require('nodemailer');
+
+// Transport Gmail (envoie à n'importe quelle adresse via mot de passe d'application)
+const gmailTransport = (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
+  ? nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+    })
+  : null;
 
 const app = express();
 app.use(cors());
@@ -248,8 +257,7 @@ const GRILLES = {
 };
 
 async function sendBilanEmail(to, prenom, matiereLabel, bilan) {
-  const key = process.env.RESEND_API_KEY;
-  if (!key || !to) return { sent: false, reason: 'no_key_or_email' };
+  if (!to) return { sent: false, reason: 'no_email' };
   const forts = (bilan.pointsForts || []).map(p => `<li style="margin-bottom:6px">${p}</li>`).join('');
   const axes = (bilan.axes || []).map(a => `<li style="margin-bottom:8px"><b>${a.axe}</b> &nbsp;<span style="color:#059669;font-weight:700">${a.gain}</span></li>`).join('');
   const html = `
@@ -271,6 +279,26 @@ async function sendBilanEmail(to, prenom, matiereLabel, bilan) {
       <p style="font-size:12px;color:#888;margin-top:20px">Ce bilan express est indicatif. En passant un vrai bac blanc, tu reçois un dossier complet et personnalisé sur ta copie.</p>
     </div>
   </div>`;
+  const subject = `📄 Ton bilan ${matiereLabel} — Les Matinées du Bac`;
+
+  // 1. Gmail en priorité (envoie à n'importe quelle adresse)
+  if (gmailTransport) {
+    try {
+      await gmailTransport.sendMail({
+        from: `"Les Matinées du Bac" <${process.env.GMAIL_USER}>`,
+        to,
+        subject,
+        html
+      });
+      return { sent: true, via: 'gmail' };
+    } catch (e) {
+      return { sent: false, error: e.message, via: 'gmail' };
+    }
+  }
+
+  // 2. Repli sur Resend si pas de Gmail configuré
+  const key = process.env.RESEND_API_KEY;
+  if (!key) return { sent: false, reason: 'no_email_method' };
   try {
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -278,14 +306,14 @@ async function sendBilanEmail(to, prenom, matiereLabel, bilan) {
       body: JSON.stringify({
         from: 'Les Matinées du Bac <onboarding@resend.dev>',
         to: [to],
-        subject: `📄 Ton bilan ${matiereLabel} — Les Matinées du Bac`,
+        subject,
         html
       })
     });
     const data = await r.json().catch(() => ({}));
-    return { sent: r.ok, data };
+    return { sent: r.ok, data, via: 'resend' };
   } catch (e) {
-    return { sent: false, error: e.message };
+    return { sent: false, error: e.message, via: 'resend' };
   }
 }
 
